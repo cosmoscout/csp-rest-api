@@ -11,6 +11,7 @@
 #include "../../../src/cs-utils/DefaultProperty.hpp"
 
 #include <pistache/endpoint.h>
+#include <pistache/mailbox.h>
 #include <pistache/router.h>
 
 namespace csp::webapi {
@@ -34,6 +35,15 @@ class Plugin : public cs::core::PluginBase {
   Settings                                  mPluginSettings;
   std::unique_ptr<Pistache::Http::Endpoint> mServer;
   std::unique_ptr<Pistache::Rest::Router>   mRestAPI;
+
+  struct Request {
+    enum class Type { eRunJS, eCaptureScreenshot };
+
+    Type        mType;
+    std::string mData;
+  };
+
+  Pistache::Queue<Request> mRequestQueue;
 
   int mOnLoadConnection = -1;
   int mOnSaveConnection = -1;

@@ -6,9 +6,12 @@
 
 #include "Plugin.hpp"
 
+#include "../../../src/cs-core/GuiManager.hpp"
 #include "../../../src/cs-core/Settings.hpp"
 #include "../../../src/cs-utils/logger.hpp"
 #include "logger.hpp"
+
+#include <curlpp/cURLpp.hpp>
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -44,10 +47,19 @@ void Plugin::init() {
 
   mRestAPI = std::make_unique<Pistache::Rest::Router>();
 
-  Pistache::Rest::Routes::Get(*mRestAPI, "/test",
+  Pistache::Rest::Routes::Get(*mRestAPI, "/run-js",
       [this](Pistache::Rest::Request const& request, Pistache::Http::ResponseWriter response) {
-        logger().info("Got request: {}", request.query().parameters()[0]);
-        response.send(Pistache::Http::Code::Ok, "Hello, World");
+        auto code = request.query().get("code");
+        if (code.isEmpty()) {
+          std::string message = "Got invalid 'run-js' request: Missing 'code' parameter!";
+          logger().warn(message);
+          response.send(Pistache::Http::Code::Bad_Request, message);
+          return Pistache::Rest::Route::Result::Failure;
+        }
+
+        mRequestQueue.push(Request{Request::Type::eRunJS, curlpp::unescape(code.get())});
+
+        response.send(Pistache::Http::Code::Ok, "Done");
         return Pistache::Rest::Route::Result::Ok;
       });
 
@@ -81,6 +93,13 @@ void Plugin::deInit() {
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
 void Plugin::update() {
+  if (!mRequestQueue.empty()) {
+    auto request = mRequestQueue.popSafe();
+    if (request->mType == Request::Type::eRunJS) {
+      logger().debug("Executing 'run-js' request: '{}'", request->mData);
+      mGuiManager->getGui()->executeJavascript(request->mData);
+    }
+  }
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
