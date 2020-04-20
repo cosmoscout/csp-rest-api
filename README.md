@@ -14,7 +14,8 @@ This plugin can be enabled with the following configuration in your `settings.js
   "plugins": {
     ...
     "csp-web-api": {
-      "port": 8999
+      "port": 9001,
+      "page": "../share/resources/gui/example-web-frontend.html"
     }
   }
 }

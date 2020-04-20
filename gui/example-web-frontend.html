@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <title>CosmoScout VR</title>
+
+</head>
+
+<body>
+
+  <textarea id="jsCode" rows="4" cols="50">
+console.log('huhu')
+</textarea>
+  <input type="button" value="Run Script" onclick="jQuery.post('/run-js', $('#jsCode').val())">
+
+  <img width="600" height="400" src="/capture?width=600&height=400&gui=false">
+
+  <!-- Third Party-->
+  <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.1.1/jquery.min.js"></script>
+
+  <script type="text/javascript">
+    $(document).ready(function () {
+    });
+  </script>
+
+</body>
+
+</html>

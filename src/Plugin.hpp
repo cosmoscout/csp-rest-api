@@ -10,6 +10,7 @@
 #include "../../../src/cs-core/PluginBase.hpp"
 #include "../../../src/cs-utils/DefaultProperty.hpp"
 
+#include <VistaBase/VistaBaseTypes.h>
 #include <pistache/endpoint.h>
 #include <pistache/mailbox.h>
 #include <pistache/router.h>
@@ -19,7 +20,8 @@ namespace csp::webapi {
 class Plugin : public cs::core::PluginBase {
  public:
   struct Settings {
-    cs::utils::Property<uint16_t> mPort;
+    cs::utils::Property<uint16_t>    mPort;
+    cs::utils::Property<std::string> mPage;
   };
 
   void init() override;
@@ -36,14 +38,17 @@ class Plugin : public cs::core::PluginBase {
   std::unique_ptr<Pistache::Http::Endpoint> mServer;
   std::unique_ptr<Pistache::Rest::Router>   mRestAPI;
 
-  struct Request {
-    enum class Type { eRunJS, eCaptureScreenshot };
+  Pistache::Queue<std::string> mJavaScriptQueue;
 
-    Type        mType;
-    std::string mData;
-  };
-
-  Pistache::Queue<Request> mRequestQueue;
+  std::mutex                   mScreenShotMutex;
+  std::condition_variable      mScreenShotDone;
+  bool                         mScreenShotRequested = false;
+  int32_t                      mScreenShotWidth     = 0;
+  int32_t                      mScreenShotHeight    = 0;
+  int32_t                      mScreenShotDelay     = 0;
+  bool                         mScreenShotGui       = false;
+  int32_t                      mCaptureAtFrame      = 0;
+  std::vector<VistaType::byte> mScreenShot;
 
   int mOnLoadConnection = -1;
   int mOnSaveConnection = -1;

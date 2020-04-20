@@ -9,9 +9,16 @@
 #include "../../../src/cs-core/GuiManager.hpp"
 #include "../../../src/cs-core/Settings.hpp"
 #include "../../../src/cs-utils/logger.hpp"
+#include "../../../src/cs-utils/utils.hpp"
 #include "logger.hpp"
 
+#include <GL/glew.h>
+#include <VistaKernel/DisplayManager/VistaDisplayManager.h>
+#include <VistaKernel/DisplayManager/VistaWindow.h>
+#include <VistaKernel/VistaFrameLoop.h>
+#include <VistaKernel/VistaSystem.h>
 #include <curlpp/cURLpp.hpp>
+#include <stb_image_write.h>
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -27,16 +34,28 @@ EXPORT_FN void destroy(cs::core::PluginBase* pluginBase) {
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
+namespace {
+void pngWriteToVector(void* context, void* data, int len) {
+  auto vector   = reinterpret_cast<std::vector<char>*>(context);
+  auto charData = reinterpret_cast<char*>(data);
+  *vector       = std::vector<char>(charData, charData + len);
+}
+} // namespace
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
 namespace csp::webapi {
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
 void from_json(nlohmann::json const& j, Plugin::Settings& o) {
   cs::core::Settings::deserialize(j, "port", o.mPort);
+  cs::core::Settings::deserialize(j, "page", o.mPage);
 }
 
 void to_json(nlohmann::json& j, Plugin::Settings const& o) {
   cs::core::Settings::serialize(j, "port", o.mPort);
+  cs::core::Settings::serialize(j, "page", o.mPage);
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -45,20 +64,61 @@ void Plugin::init() {
 
   logger().info("Loading plugin...");
 
+  stbi_flip_vertically_on_write(1);
+
   mRestAPI = std::make_unique<Pistache::Rest::Router>();
 
-  Pistache::Rest::Routes::Get(*mRestAPI, "/run-js",
+  // Return the landing page when the root document is requested.
+  mRestAPI->get(
+      "/", [this](Pistache::Rest::Request const& request, Pistache::Http::ResponseWriter response) {
+        Pistache::Http::serveFile(response, mPluginSettings.mPage.get());
+        return Pistache::Rest::Route::Result::Ok;
+      });
+
+  // We won't return any files, except for the favicon.
+  mRestAPI->get("/favicon.ico",
       [this](Pistache::Rest::Request const& request, Pistache::Http::ResponseWriter response) {
-        auto code = request.query().get("code");
-        if (code.isEmpty()) {
-          std::string message = "Got invalid 'run-js' request: Missing 'code' parameter!";
-          logger().warn(message);
-          response.send(Pistache::Http::Code::Bad_Request, message);
-          return Pistache::Rest::Route::Result::Failure;
-        }
+        Pistache::Http::serveFile(response, "../share/resources/icons/icon.ico");
+        return Pistache::Rest::Route::Result::Ok;
+      });
 
-        mRequestQueue.push(Request{Request::Type::eRunJS, curlpp::unescape(code.get())});
+  mRestAPI->get("/log",
+      [this](Pistache::Rest::Request const& request, Pistache::Http::ResponseWriter response) {
+        // uint32_t length =
+        //     cs::utils::fromString<uint32_t>(request.query().get("length").getOrElse("100"));
+        response.send(Pistache::Http::Code::Ok, "Log");
+        return Pistache::Rest::Route::Result::Ok;
+      });
 
+  mRestAPI->get("/capture", [this](Pistache::Rest::Request const& request,
+                                Pistache::Http::ResponseWriter    response) {
+    std::unique_lock<std::mutex> lock(mScreenShotMutex);
+
+    mScreenShotDelay = std::clamp(
+        cs::utils::fromString<int32_t>(request.query().get("delay").getOrElse("50")), 1, 200);
+    mScreenShotWidth = std::clamp(
+        cs::utils::fromString<int32_t>(request.query().get("width").getOrElse("800")), 10, 2000);
+    mScreenShotHeight = std::clamp(
+        cs::utils::fromString<int32_t>(request.query().get("height").getOrElse("600")), 10, 2000);
+    mScreenShotGui       = request.query().get("gui").getOrElse("false") == "true";
+    mScreenShotRequested = true;
+
+    mScreenShotDone.wait(lock);
+
+    std::vector<char> pngData;
+
+    stbi_write_png_to_func(&pngWriteToVector, &pngData, mScreenShotWidth, mScreenShotHeight, 3,
+        mScreenShot.data(), mScreenShotWidth * 3);
+
+    response.headers().add<Pistache::Http::Header::ContentType>("image/png");
+    response.send(Pistache::Http::Code::Ok, pngData.data(), pngData.size());
+    return Pistache::Rest::Route::Result::Ok;
+  });
+
+  mRestAPI->post("/run-js",
+      [this](Pistache::Rest::Request const& request, Pistache::Http::ResponseWriter response) {
+        mJavaScriptQueue.push(request.body());
+        response.headers().add<Pistache::Http::Header::ContentType>("text/plain");
         response.send(Pistache::Http::Code::Ok, "Done");
         return Pistache::Rest::Route::Result::Ok;
       });
@@ -93,12 +153,33 @@ void Plugin::deInit() {
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
 void Plugin::update() {
-  if (!mRequestQueue.empty()) {
-    auto request = mRequestQueue.popSafe();
-    if (request->mType == Request::Type::eRunJS) {
-      logger().debug("Executing 'run-js' request: '{}'", request->mData);
-      mGuiManager->getGui()->executeJavascript(request->mData);
-    }
+  if (!mJavaScriptQueue.empty()) {
+    auto request = mJavaScriptQueue.popSafe();
+    logger().debug("Executing 'run-js' request: '{}'", *request);
+    mGuiManager->getGui()->executeJavascript(*request);
+  }
+
+  std::unique_lock<std::mutex> lock(mScreenShotMutex);
+  if (mScreenShotRequested) {
+    auto window = GetVistaSystem()->GetDisplayManager()->GetWindows().begin()->second;
+    window->GetWindowProperties()->SetSize(mScreenShotWidth, mScreenShotHeight);
+    mCaptureAtFrame = GetVistaSystem()->GetFrameLoop()->GetFrameCount() + mScreenShotDelay;
+    mAllSettings->pEnableUserInterface = mScreenShotGui;
+    mScreenShotRequested               = false;
+  }
+
+  if (mCaptureAtFrame > 0 && mCaptureAtFrame == GetVistaSystem()->GetFrameLoop()->GetFrameCount()) {
+    logger().info("Capture screenshot {}x{}; show gui: {}", mScreenShotWidth, mScreenShotHeight,
+        mScreenShotGui);
+
+    auto window = GetVistaSystem()->GetDisplayManager()->GetWindows().begin()->second;
+    window->GetWindowProperties()->GetSize(mScreenShotWidth, mScreenShotHeight);
+    mScreenShot.resize(mScreenShotWidth * mScreenShotHeight * 3);
+    glReadPixels(
+        0, 0, mScreenShotWidth, mScreenShotHeight, GL_RGB, GL_UNSIGNED_BYTE, &mScreenShot[0]);
+
+    mCaptureAtFrame = 0;
+    mScreenShotDone.notify_one();
   }
 }
 
