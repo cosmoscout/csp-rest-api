@@ -50,8 +50,12 @@ class Plugin : public cs::core::PluginBase {
   int32_t                      mCaptureAtFrame      = 0;
   std::vector<VistaType::byte> mScreenShot;
 
-  int mOnLoadConnection = -1;
-  int mOnSaveConnection = -1;
+  std::mutex              mLogMutex;
+  std::deque<std::string> mLogMessages;
+
+  int mOnLoadConnection       = -1;
+  int mOnSaveConnection       = -1;
+  int mOnLogMessageConnection = -1;
 };
 
 } // namespace csp::webapi

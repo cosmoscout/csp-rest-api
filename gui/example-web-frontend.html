@@ -16,12 +16,24 @@ console.log('huhu')
 
   <img width="600" height="400" src="/capture?width=600&height=400&gui=false">
 
+  <div id="log" width="600" height="400" src="/log"></div>
+
   <!-- Third Party-->
   <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.1.1/jquery.min.js"></script>
 
   <script type="text/javascript">
-    $(document).ready(function () {
-    });
+    window.setInterval(function () {
+      reloadLog()
+    }, 1000);
+
+    function reloadLog() {
+      jQuery.getJSON("/log", function (result) {
+        $("#log").empty();
+        jQuery.each(result, function (i, item) {
+          $("#log").append("<div>" + item + "</div>");
+        });
+      });
+    }
   </script>
 
 </body>

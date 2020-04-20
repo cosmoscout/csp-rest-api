@@ -68,6 +68,21 @@ void Plugin::init() {
 
   mRestAPI = std::make_unique<Pistache::Rest::Router>();
 
+  mOnLogMessageConnection = cs::utils::onLogMessage().connect(
+      [this](
+          std::string const& logger, spdlog::level::level_enum level, std::string const& message) {
+        const std::unordered_map<spdlog::level::level_enum, std::string> mapping = {
+            {spdlog::level::trace, "T"}, {spdlog::level::debug, "D"}, {spdlog::level::info, "I"},
+            {spdlog::level::warn, "W"}, {spdlog::level::err, "E"}, {spdlog::level::critical, "C"}};
+
+        std::unique_lock<std::mutex> lock(mLogMutex);
+        mLogMessages.push_front("[" + mapping.at(level) + "] " + logger + message);
+
+        if (mLogMessages.size() > 1000) {
+          mLogMessages.pop_back();
+        }
+      });
+
   // Return the landing page when the root document is requested.
   mRestAPI->get(
       "/", [this](Pistache::Rest::Request const& request, Pistache::Http::ResponseWriter response) {
@@ -84,9 +99,20 @@ void Plugin::init() {
 
   mRestAPI->get("/log",
       [this](Pistache::Rest::Request const& request, Pistache::Http::ResponseWriter response) {
-        // uint32_t length =
-        //     cs::utils::fromString<uint32_t>(request.query().get("length").getOrElse("100"));
-        response.send(Pistache::Http::Code::Ok, "Log");
+        uint32_t length =
+            cs::utils::fromString<uint32_t>(request.query().get("length").getOrElse("100"));
+
+        std::unique_lock<std::mutex> lock(mLogMutex);
+        nlohmann::json               json;
+
+        auto it = mLogMessages.begin();
+        while (json.size() < length && it != mLogMessages.end()) {
+          json.push_back(*it);
+          ++it;
+        }
+
+        response.headers().add<Pistache::Http::Header::ContentType>("application/json");
+        response.send(Pistache::Http::Code::Ok, json.dump());
         return Pistache::Rest::Route::Result::Ok;
       });
 
@@ -142,6 +168,7 @@ void Plugin::deInit() {
 
   mAllSettings->onLoad().disconnect(mOnLoadConnection);
   mAllSettings->onSave().disconnect(mOnSaveConnection);
+  cs::utils::onLogMessage().disconnect(mOnLogMessageConnection);
 
   quitServer();
 
