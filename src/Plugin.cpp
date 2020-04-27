@@ -86,13 +86,19 @@ void Plugin::init() {
   // Return the landing page when the root document is requested.
   mRestAPI->get(
       "/", [this](Pistache::Rest::Request const& request, Pistache::Http::ResponseWriter response) {
-        Pistache::Http::serveFile(response, mPluginSettings.mPage.get());
+        if (mPluginSettings.mPage) {
+          Pistache::Http::serveFile(response, *mPluginSettings.mPage);
+        } else {
+          response.send(
+              Pistache::Http::Code::Ok, "CosmoScout VR is running. You can modify this page with "
+                                        "the 'page' key in the configuration of 'csp-web-api'.");
+        }
         return Pistache::Rest::Route::Result::Ok;
       });
 
   // We won't return any files, except for the favicon.
   mRestAPI->get("/favicon.ico",
-      [this](Pistache::Rest::Request const& request, Pistache::Http::ResponseWriter response) {
+      [](Pistache::Rest::Request const& request, Pistache::Http::ResponseWriter response) {
         Pistache::Http::serveFile(response, "../share/resources/icons/icon.ico");
         return Pistache::Rest::Route::Result::Ok;
       });

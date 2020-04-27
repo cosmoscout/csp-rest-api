@@ -20,8 +20,8 @@ namespace csp::webapi {
 class Plugin : public cs::core::PluginBase {
  public:
   struct Settings {
-    cs::utils::Property<uint16_t>    mPort;
-    cs::utils::Property<std::string> mPage;
+    cs::utils::Property<uint16_t> mPort;
+    std::optional<std::string>    mPage;
   };
 
   void init() override;
