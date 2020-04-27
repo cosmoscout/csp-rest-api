@@ -5,26 +5,212 @@
   <meta charset="UTF-8">
   <title>CosmoScout VR</title>
 
+  <link rel="stylesheet"
+    href="https://cdnjs.cloudflare.com/ajax/libs/materialize/1.0.0/css/materialize.min.css">
+  <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
+
+  <style>
+    .monospace {
+      font-family: monospace;
+    }
+
+    .code {
+      font-family: monospace;
+      white-space: nowrap;
+      overflow-x: auto;
+      padding: 5px;
+    }
+  </style>
 </head>
 
-<body>
+<body class=" blue-grey lighten-5">
+  <div class="row">
 
-  <textarea id="jsCode" rows="4" cols="50">
-console.log('huhu')
-</textarea>
-  <input type="button" value="Run Script" onclick="jQuery.post('/run-js', $('#jsCode').val())">
 
-  <img width="600" height="400" src="/capture?width=600&height=400&gui=false">
 
-  <div id="log" width="600" height="400" src="/log"></div>
+    <div class="col s6">
+
+
+      <div class="card hoverable">
+        <div class="card-image">
+          <img id="screenshot" class="materialboxed" src="/capture?width=1200&height=600&gui=false">
+          <a class="btn-floating halfway-fab waves-effect waves-light red"
+            onclick="reloadScreenshot()"><i class="material-icons">refresh</i></a>
+        </div>
+        <div class="card-content">
+          <p>This is a screenshot of CosmoScout VR, retrieved with a /capture request.
+            You can hit the refresh button to request a new screenshot.</p>
+        </div>
+      </div>
+
+      <div class="card hoverable">
+        <div class="card-content">
+          <form style="display: flex;">
+            <div style="flex-grow: 1;">
+              <div class="input-field">
+                <i class="material-icons prefix">code</i>
+                <textarea id="jsCode" class="materialize-textarea monospace"></textarea>
+                <label for="jsCode">JavaScript Code</label>
+              </div>
+            </div>
+            <div style="align-self:center;">
+              <a type="button" class="waves-effect waves-light btn center-align"
+                onclick="jQuery.post('/run-js', $('#jsCode').val())"><i
+                  class="material-icons left">play_arrow</i><span
+                  class="hide-on-small-only">Run</span></a>
+            </div>
+          </form>
+
+        </div>
+
+        <div class="card-content blue-grey darken-1 white-text">
+          <span class="card-title">Output</span>
+          <p id="log" class="monospace"></p>
+        </div>
+
+      </div>
+    </div>
+
+    <div class="col s6">
+
+
+
+
+      <div class="card hoverable blue-grey darken-1 white-text">
+        <div class="card-content">
+          <span class="card-title">Welcome to the
+            demo page of the Web-API of CosmoScout VR!</span>
+          <p>How to use this demo page. How to replace it.</p>
+        </div>
+        <div class="card-action">
+          <a href="https://github.com/cosmoscout/cosmoscout-vr/tree/develop" target="_blank">Visit
+            CosmoScout VR on GitHub.com</a>
+        </div>
+      </div>
+
+      <ul class="collapsible hoverable">
+        <li>
+          <div class="collapsible-header"><i class="material-icons">wallpaper</i>/capture
+          </div>
+          <div class="collapsible-body white">
+            The /capture endpoint can be used to capture an image. Here is an example URL: <a
+              href="/capture?width=1200&height=800&gui=true"
+              target="_blank">/capture?width=1200&height=800&gui=true</a>. To retrieve images with
+            the command line, you could use curl:
+
+            <div class="card-panel blue-grey darken-3 white-text code">
+              curl <span class="document-location"></span>capture --output image.png
+            </div>
+
+            <div class="card-panel blue-grey darken-3 white-text code">
+              curl <span class="document-location"></span>capture?width=1200&height=800&gui=true
+              --output image.png
+            </div>
+
+
+            <table>
+              <thead>
+                <tr>
+                  <th>Parameter</th>
+                  <th>Default</th>
+                  <th>Description</th>
+                </tr>
+              </thead>
+
+              <tbody>
+                <tr>
+                  <td>width</td>
+                  <td>800</td>
+                  <td>Specifies the desired image width in pixels.</td>
+                </tr>
+                <tr>
+                  <td>height</td>
+                  <td>600</td>
+                  <td>Specifies the desired image height in pixels.</td>
+                </tr>
+                <tr>
+                  <td>gui</td>
+                  <td>false</td>
+                  <td>If set to true, the user interface will be included in the captured image.
+                  </td>
+                </tr>
+                <tr>
+                  <td>delay</td>
+                  <td>50</td>
+                  <td>The application will wait this many frames before capturing the image.
+                    Increase this, if something seems to be not properly loaded.</td>
+                </tr>
+              </tbody>
+            </table>
+
+
+          </div>
+        </li>
+        <li>
+          <div class="collapsible-header"><i class="material-icons">list</i>/log
+          </div>
+          <div class="collapsible-body white">
+
+            The /log endpoint can be used to retrieve the commandline output of CosmoScout VR in a
+            json file. Note that this log only contains messages logged after the web-api plugin has
+            been loaded. Here is an example URL: <a href="/log?length=10"
+              target="_blank">/log?length=10</a>. You could retrieve the log messages also with
+            curl:
+
+            <div class="card-panel blue-grey darken-3 white-text code">
+              curl <span class="document-location"></span>log --output log.json
+            </div>
+
+            <div class="card-panel blue-grey darken-3 white-text code">
+              curl <span class="document-location"></span>log?length=10 --output log.json
+            </div>
+
+            <table>
+              <thead>
+                <tr>
+                  <th>Parameter</th>
+                  <th>Default</th>
+                  <th>Description</th>
+                </tr>
+              </thead>
+
+              <tbody>
+                <tr>
+                  <td>length</td>
+                  <td>100</td>
+                  <td>Specifies the maximum number of log entries to retrieve. There is an internal
+                    maximum of 1000.</td>
+                </tr>
+              </tbody>
+            </table>
+
+
+
+
+          </div>
+        </li>
+        <li>
+          <div class="collapsible-header"><i class="material-icons">code</i>/run-js</div>
+          <div class="collapsible-body white"><span>Lorem ipsum dolor sit amet.</span></div>
+        </li>
+      </ul>
+
+    </div>
+  </div>
 
   <!-- Third Party-->
   <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.1.1/jquery.min.js"></script>
+  <script
+    src="https://cdnjs.cloudflare.com/ajax/libs/materialize/1.0.0/js/materialize.min.js"></script>
 
   <script type="text/javascript">
     window.setInterval(function () {
       reloadLog()
     }, 1000);
+
+    function reloadScreenshot() {
+      document.getElementById('screenshot').src = "/capture?width=1200&height=600&gui=false?random=" + new Date().getTime();
+    }
 
     function reloadLog() {
       jQuery.getJSON("/log", function (result) {
@@ -34,6 +220,10 @@ console.log('huhu')
         });
       });
     }
+
+    $(".document-location").text(document.location);
+
+    M.AutoInit();
   </script>
 
 </body>
