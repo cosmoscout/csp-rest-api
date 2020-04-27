@@ -27,7 +27,8 @@ add_library(csp-web-api SHARED
 target_link_libraries(csp-web-api
   PUBLIC
     cs-core
-    pistache::pistache
+    civetweb::civetweb
+    civetweb::civetwebcpp
 )
 
 # Add this Plugin to a "plugins" folder in your IDE.

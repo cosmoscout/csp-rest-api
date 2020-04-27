@@ -12,6 +12,7 @@
 #include "../../../src/cs-utils/utils.hpp"
 #include "logger.hpp"
 
+#include <CivetServer.h>
 #include <GL/glew.h>
 #include <VistaKernel/DisplayManager/VistaDisplayManager.h>
 #include <VistaKernel/DisplayManager/VistaWindow.h>
@@ -35,11 +36,62 @@ EXPORT_FN void destroy(cs::core::PluginBase* pluginBase) {
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
 namespace {
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
 void pngWriteToVector(void* context, void* data, int len) {
   auto vector   = reinterpret_cast<std::vector<char>*>(context);
   auto charData = reinterpret_cast<char*>(data);
   *vector       = std::vector<char>(charData, charData + len);
 }
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
+class GetHandler : public CivetHandler {
+ public:
+  GetHandler(std::function<void(CivetServer*, mg_connection*)> const& handler)
+      : mHandler(std::move(handler)) {
+  }
+
+  bool handleGet(CivetServer* server, mg_connection* conn) override {
+    mHandler(server, conn);
+    return true;
+  }
+
+ private:
+  std::function<void(CivetServer*, mg_connection*)> mHandler;
+};
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
+class PostHandler : public CivetHandler {
+ public:
+  PostHandler(std::function<void(CivetServer*, mg_connection*)> const& handler)
+      : mHandler(std::move(handler)) {
+  }
+
+  bool handlePost(CivetServer* server, mg_connection* conn) override {
+    mHandler(server, conn);
+    return true;
+  }
+
+ private:
+  std::function<void(CivetServer*, mg_connection*)> mHandler;
+};
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
+template <typename T>
+T getParam(mg_connection* conn, std::string const& name, T const& defaultValue) {
+  std::string s;
+  if (CivetServer::getParam(conn, name.c_str(), s)) {
+    return cs::utils::fromString<T>(s);
+  }
+  return defaultValue;
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
 } // namespace
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -64,10 +116,6 @@ void Plugin::init() {
 
   logger().info("Loading plugin...");
 
-  stbi_flip_vertically_on_write(1);
-
-  mRestAPI = std::make_unique<Pistache::Rest::Router>();
-
   mOnLogMessageConnection = cs::utils::onLogMessage().connect(
       [this](
           std::string const& logger, spdlog::level::level_enum level, std::string const& message) {
@@ -84,76 +132,62 @@ void Plugin::init() {
       });
 
   // Return the landing page when the root document is requested.
-  mRestAPI->get(
-      "/", [this](Pistache::Rest::Request const& request, Pistache::Http::ResponseWriter response) {
-        if (mPluginSettings.mPage) {
-          Pistache::Http::serveFile(response, *mPluginSettings.mPage);
-        } else {
-          response.send(
-              Pistache::Http::Code::Ok, "CosmoScout VR is running. You can modify this page with "
-                                        "the 'page' key in the configuration of 'csp-web-api'.");
-        }
-        return Pistache::Rest::Route::Result::Ok;
-      });
+  mRootHandler = std::make_unique<GetHandler>([this](CivetServer* server, mg_connection* conn) {
+    if (mPluginSettings.mPage) {
+      mg_send_mime_file(conn, mPluginSettings.mPage.value().c_str(), "text/html");
+    } else {
+      std::string response = "CosmoScout VR is running. You can modify this page with "
+                             "the 'page' key in the configuration of 'csp-web-api'.";
+      mg_send_http_ok(conn, "text/plain", response.length());
+      mg_write(conn, response.data(), response.length());
+    }
+  });
 
-  // We won't return any files, except for the favicon.
-  mRestAPI->get("/favicon.ico",
-      [](Pistache::Rest::Request const& request, Pistache::Http::ResponseWriter response) {
-        Pistache::Http::serveFile(response, "../share/resources/icons/icon.ico");
-        return Pistache::Rest::Route::Result::Ok;
-      });
+  mLogHandler = std::make_unique<GetHandler>([this](CivetServer* server, mg_connection* conn) {
+    uint32_t length = getParam<uint32_t>(conn, "length", 100U);
 
-  mRestAPI->get("/log",
-      [this](Pistache::Rest::Request const& request, Pistache::Http::ResponseWriter response) {
-        uint32_t length =
-            cs::utils::fromString<uint32_t>(request.query().get("length").getOrElse("100"));
+    std::unique_lock<std::mutex> lock(mLogMutex);
+    nlohmann::json               json;
 
-        std::unique_lock<std::mutex> lock(mLogMutex);
-        nlohmann::json               json;
+    auto it = mLogMessages.begin();
+    while (json.size() < length && it != mLogMessages.end()) {
+      json.push_back(*it);
+      ++it;
+    }
 
-        auto it = mLogMessages.begin();
-        while (json.size() < length && it != mLogMessages.end()) {
-          json.push_back(*it);
-          ++it;
-        }
+    std::string response = json.dump();
+    mg_send_http_ok(conn, "application/json", response.length());
+    mg_write(conn, response.data(), response.length());
+  });
 
-        response.headers().add<Pistache::Http::Header::ContentType>("application/json");
-        response.send(Pistache::Http::Code::Ok, json.dump());
-        return Pistache::Rest::Route::Result::Ok;
-      });
-
-  mRestAPI->get("/capture", [this](Pistache::Rest::Request const& request,
-                                Pistache::Http::ResponseWriter    response) {
+  mCaptureHandler = std::make_unique<GetHandler>([this](CivetServer* server, mg_connection* conn) {
     std::unique_lock<std::mutex> lock(mScreenShotMutex);
 
-    mScreenShotDelay = std::clamp(
-        cs::utils::fromString<int32_t>(request.query().get("delay").getOrElse("50")), 1, 200);
-    mScreenShotWidth = std::clamp(
-        cs::utils::fromString<int32_t>(request.query().get("width").getOrElse("800")), 10, 2000);
-    mScreenShotHeight = std::clamp(
-        cs::utils::fromString<int32_t>(request.query().get("height").getOrElse("600")), 10, 2000);
-    mScreenShotGui       = request.query().get("gui").getOrElse("false") == "true";
+    mScreenShotDelay     = std::clamp(getParam<int32_t>(conn, "delay", 50), 1, 200);
+    mScreenShotWidth     = std::clamp(getParam<int32_t>(conn, "width", 800), 10, 2000);
+    mScreenShotHeight    = std::clamp(getParam<int32_t>(conn, "height", 600), 10, 2000);
+    mScreenShotGui       = getParam<std::string>(conn, "gui", "false") == "true";
     mScreenShotRequested = true;
 
     mScreenShotDone.wait(lock);
 
     std::vector<char> pngData;
 
+    stbi_flip_vertically_on_write(1);
     stbi_write_png_to_func(&pngWriteToVector, &pngData, mScreenShotWidth, mScreenShotHeight, 3,
         mScreenShot.data(), mScreenShotWidth * 3);
+    stbi_flip_vertically_on_write(0);
 
-    response.headers().add<Pistache::Http::Header::ContentType>("image/png");
-    response.send(Pistache::Http::Code::Ok, pngData.data(), pngData.size());
-    return Pistache::Rest::Route::Result::Ok;
+    mg_send_http_ok(conn, "image/png", pngData.size());
+    mg_write(conn, pngData.data(), pngData.size());
   });
 
-  mRestAPI->post("/run-js",
-      [this](Pistache::Rest::Request const& request, Pistache::Http::ResponseWriter response) {
-        mJavaScriptQueue.push(request.body());
-        response.headers().add<Pistache::Http::Header::ContentType>("text/plain");
-        response.send(Pistache::Http::Code::Ok, "Done");
-        return Pistache::Rest::Route::Result::Ok;
-      });
+  mJSHandler = std::make_unique<PostHandler>([this](CivetServer* server, mg_connection* conn) {
+    mJavaScriptQueue.push(CivetServer::getPostData(conn));
+    std::string response = "Done.";
+    mg_send_http_ok(conn, "text/plain", response.length());
+    mg_write(conn, response.data(), response.length());
+  });
 
   mOnLoadConnection = mAllSettings->onLoad().connect([this]() { onLoad(); });
   mOnSaveConnection = mAllSettings->onSave().connect(
@@ -178,8 +212,6 @@ void Plugin::deInit() {
 
   quitServer();
 
-  mRestAPI.reset();
-
   logger().info("Unloading done.");
 }
 
@@ -187,9 +219,10 @@ void Plugin::deInit() {
 
 void Plugin::update() {
   if (!mJavaScriptQueue.empty()) {
-    auto request = mJavaScriptQueue.popSafe();
-    logger().debug("Executing 'run-js' request: '{}'", *request);
-    mGuiManager->getGui()->executeJavascript(*request);
+    auto request = mJavaScriptQueue.front();
+    mJavaScriptQueue.pop();
+    logger().debug("Executing 'run-js' request: '{}'", request);
+    mGuiManager->getGui()->executeJavascript(request);
   }
 
   std::unique_lock<std::mutex> lock(mScreenShotMutex);
@@ -222,13 +255,13 @@ void Plugin::startServer(uint16_t port) {
   quitServer();
 
   try {
-    auto addr = Pistache::Address(Pistache::Ipv4::any(), Pistache::Port(port));
-    mServer   = std::make_unique<Pistache::Http::Endpoint>(addr);
-    auto opts = Pistache::Http::Endpoint::options().threads(1).flags(
-        Pistache::Tcp::Options::ReuseAddr | Pistache::Tcp::Options::ReusePort);
-    mServer->init(opts);
-    mServer->setHandler(mRestAPI->handler());
-    mServer->serveThreaded();
+    std::vector<std::string> options{
+        "document_root", "/", "listening_ports", std::to_string(port), "num_threads", "1"};
+    mServer = std::make_unique<CivetServer>(options);
+    mServer->addHandler("/", *mRootHandler);
+    mServer->addHandler("/log", *mLogHandler);
+    mServer->addHandler("/capture", *mCaptureHandler);
+    mServer->addHandler("/run-js", *mJSHandler);
   } catch (std::exception const& e) { logger().warn("Failed to start server: {}!", e.what()); }
 }
 
@@ -237,7 +270,6 @@ void Plugin::startServer(uint16_t port) {
 void Plugin::quitServer() {
   try {
     if (mServer) {
-      mServer->shutdown();
       mServer.reset();
     }
   } catch (std::exception const& e) { logger().warn("Failed to quit server: {}!", e.what()); }

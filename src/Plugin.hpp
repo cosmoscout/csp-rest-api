@@ -9,11 +9,13 @@
 
 #include "../../../src/cs-core/PluginBase.hpp"
 #include "../../../src/cs-utils/DefaultProperty.hpp"
+#include "../../../src/cs-utils/SafeQueue.hpp"
 
 #include <VistaBase/VistaBaseTypes.h>
-#include <pistache/endpoint.h>
-#include <pistache/mailbox.h>
-#include <pistache/router.h>
+#include <condition_variable>
+
+class CivetServer;
+class CivetHandler;
 
 namespace csp::webapi {
 
@@ -34,11 +36,14 @@ class Plugin : public cs::core::PluginBase {
   void startServer(uint16_t port);
   void quitServer();
 
-  Settings                                  mPluginSettings;
-  std::unique_ptr<Pistache::Http::Endpoint> mServer;
-  std::unique_ptr<Pistache::Rest::Router>   mRestAPI;
+  Settings                      mPluginSettings;
+  std::unique_ptr<CivetServer>  mServer;
+  std::unique_ptr<CivetHandler> mRootHandler;
+  std::unique_ptr<CivetHandler> mLogHandler;
+  std::unique_ptr<CivetHandler> mCaptureHandler;
+  std::unique_ptr<CivetHandler> mJSHandler;
 
-  Pistache::Queue<std::string> mJavaScriptQueue;
+  cs::utils::SafeQueue<std::string> mJavaScriptQueue;
 
   std::mutex                   mScreenShotMutex;
   std::condition_variable      mScreenShotDone;
