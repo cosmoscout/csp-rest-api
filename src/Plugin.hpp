@@ -13,6 +13,7 @@
 
 #include <VistaBase/VistaBaseTypes.h>
 #include <condition_variable>
+#include <optional>
 
 class CivetServer;
 class CivetHandler;
