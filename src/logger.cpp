@@ -13,7 +13,7 @@ namespace csp::webapi {
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
 spdlog::logger& logger() {
-  static auto logger = cs::utils::createLogger("csp-webapi");
+  static auto logger = cs::utils::createLogger("csp-web-api");
   return *logger;
 }
 
