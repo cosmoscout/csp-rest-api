@@ -9,11 +9,12 @@
 
 #include "../../../src/cs-core/PluginBase.hpp"
 #include "../../../src/cs-utils/DefaultProperty.hpp"
-#include "../../../src/cs-utils/SafeQueue.hpp"
 
 #include <VistaBase/VistaBaseTypes.h>
 #include <condition_variable>
+#include <deque>
 #include <optional>
+#include <queue>
 
 class CivetServer;
 class CivetHandler;
@@ -44,8 +45,6 @@ class Plugin : public cs::core::PluginBase {
   std::unique_ptr<CivetHandler> mCaptureHandler;
   std::unique_ptr<CivetHandler> mJSHandler;
 
-  cs::utils::SafeQueue<std::string> mJavaScriptQueue;
-
   std::mutex                   mScreenShotMutex;
   std::condition_variable      mScreenShotDone;
   bool                         mScreenShotRequested = false;
@@ -58,6 +57,9 @@ class Plugin : public cs::core::PluginBase {
 
   std::mutex              mLogMutex;
   std::deque<std::string> mLogMessages;
+
+  std::mutex              mJavaScriptCallsMutex;
+  std::queue<std::string> mJavaScriptCalls;
 
   int mOnLoadConnection       = -1;
   int mOnSaveConnection       = -1;

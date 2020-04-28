@@ -43,10 +43,9 @@ namespace {
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
 // Converts a void* to a std::vector<char> (which is given through a void* as well). So this is
-// pretty unsafe, but I think it's the only way to make stb_image write to a std::vector<char>. If
-// anybody has a better idea...
+// pretty unsafe, but I think it's the only way to make stb_image write to a std::vector<char>.
 void pngWriteToVector(void* context, void* data, int len) {
-  auto* vector = static_cast<std::vector<char>*>(context);
+  auto* vector   = static_cast<std::vector<char>*>(context);
   auto* charData = static_cast<char*>(data);
   // NOLINTNEXTLINE (cppcoreguidelines-pro-bounds-pointer-arithmetic)
   *vector = std::vector<char>(charData, charData + len);
@@ -130,7 +129,7 @@ void Plugin::init() {
             {spdlog::level::trace, "T"}, {spdlog::level::debug, "D"}, {spdlog::level::info, "I"},
             {spdlog::level::warn, "W"}, {spdlog::level::err, "E"}, {spdlog::level::critical, "C"}};
 
-        std::unique_lock<std::mutex> lock(mLogMutex);
+        std::lock_guard<std::mutex> lock(mLogMutex);
         mLogMessages.push_front("[" + mapping.at(level) + "] " + logger + message);
 
         if (mLogMessages.size() > 1000) {
@@ -151,15 +150,16 @@ void Plugin::init() {
   });
 
   mLogHandler = std::make_unique<GetHandler>([this](mg_connection* conn) {
-    auto length = getParam<uint32_t>(conn, "length", 100U);
+    auto           length = getParam<uint32_t>(conn, "length", 100U);
+    nlohmann::json json;
 
-    std::unique_lock<std::mutex> lock(mLogMutex);
-    nlohmann::json               json;
-
-    auto it = mLogMessages.begin();
-    while (json.size() < length && it != mLogMessages.end()) {
-      json.push_back(*it);
-      ++it;
+    {
+      std::lock_guard<std::mutex> lock(mLogMutex);
+      auto                        it = mLogMessages.begin();
+      while (json.size() < length && it != mLogMessages.end()) {
+        json.push_back(*it);
+        ++it;
+      }
     }
 
     std::string response = json.dump();
@@ -168,32 +168,35 @@ void Plugin::init() {
   });
 
   mCaptureHandler = std::make_unique<GetHandler>([this](mg_connection* conn) {
-    std::unique_lock<std::mutex> lock(mScreenShotMutex);
-
-    mScreenShotDelay     = std::clamp(getParam<int32_t>(conn, "delay", 50), 1, 200);
-    mScreenShotWidth     = std::clamp(getParam<int32_t>(conn, "width", 800), 10, 2000);
-    mScreenShotHeight    = std::clamp(getParam<int32_t>(conn, "height", 600), 10, 2000);
-    mScreenShotGui       = getParam<std::string>(conn, "gui", "false") == "true";
-    mScreenShotRequested = true;
-
-    mScreenShotDone.wait(lock);
-
     std::vector<char> pngData;
+    {
+      std::unique_lock<std::mutex> lock(mScreenShotMutex);
 
-    stbi_flip_vertically_on_write(1);
-    stbi_write_png_to_func(&pngWriteToVector, &pngData, mScreenShotWidth, mScreenShotHeight, 3,
-        mScreenShot.data(), mScreenShotWidth * 3);
-    stbi_flip_vertically_on_write(0);
+      mScreenShotDelay     = std::clamp(getParam<int32_t>(conn, "delay", 50), 1, 200);
+      mScreenShotWidth     = std::clamp(getParam<int32_t>(conn, "width", 800), 10, 2000);
+      mScreenShotHeight    = std::clamp(getParam<int32_t>(conn, "height", 600), 10, 2000);
+      mScreenShotGui       = getParam<std::string>(conn, "gui", "false") == "true";
+      mScreenShotRequested = true;
+
+      mScreenShotDone.wait(lock);
+
+      stbi_flip_vertically_on_write(1);
+      stbi_write_png_to_func(&pngWriteToVector, &pngData, mScreenShotWidth, mScreenShotHeight, 3,
+          mScreenShot.data(), mScreenShotWidth * 3);
+      stbi_flip_vertically_on_write(0);
+    }
 
     mg_send_http_ok(conn, "image/png", pngData.size());
     mg_write(conn, pngData.data(), pngData.size());
   });
 
   mJSHandler = std::make_unique<PostHandler>([this](mg_connection* conn) {
-    mJavaScriptQueue.push(CivetServer::getPostData(conn));
     std::string response = "Done.";
     mg_send_http_ok(conn, "text/plain", response.length());
     mg_write(conn, response.data(), response.length());
+
+    std::lock_guard<std::mutex> lock(mJavaScriptCallsMutex);
+    mJavaScriptCalls.push(CivetServer::getPostData(conn));
   });
 
   mOnLoadConnection = mAllSettings->onLoad().connect([this]() { onLoad(); });
@@ -225,14 +228,18 @@ void Plugin::deInit() {
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
 void Plugin::update() {
-  if (!mJavaScriptQueue.empty()) {
-    auto request = mJavaScriptQueue.front();
-    mJavaScriptQueue.pop();
-    logger().debug("Executing 'run-js' request: '{}'", request);
-    mGuiManager->getGui()->executeJavascript(request);
+
+  {
+    std::lock_guard<std::mutex> lock(mJavaScriptCallsMutex);
+    if (!mJavaScriptCalls.empty()) {
+      auto request = mJavaScriptCalls.front();
+      mJavaScriptCalls.pop();
+      logger().debug("Executing 'run-js' request: '{}'", request);
+      mGuiManager->getGui()->executeJavascript(request);
+    }
   }
 
-  std::unique_lock<std::mutex> lock(mScreenShotMutex);
+  std::lock_guard<std::mutex> lock(mScreenShotMutex);
   if (mScreenShotRequested) {
     auto* window = GetVistaSystem()->GetDisplayManager()->GetWindows().begin()->second;
     window->GetWindowProperties()->SetSize(mScreenShotWidth, mScreenShotHeight);
