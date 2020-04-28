@@ -20,6 +20,7 @@
 #include <VistaKernel/VistaSystem.h>
 #include <curlpp/cURLpp.hpp>
 #include <stb_image_write.h>
+#include <utility>
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -39,44 +40,50 @@ namespace {
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
+// Converts a void* to a std::vector<char> (which is given through a void* as well). So this is
+// pretty unsafe, but I think it's the only way to make stb_image write to a std::vector<char>. If
+// anybody has a better idea...
 void pngWriteToVector(void* context, void* data, int len) {
-  auto vector   = reinterpret_cast<std::vector<char>*>(context);
+  // NOLINTNEXTLINE (cppcoreguidelines-pro-type-reinterpret-cast)
+  auto vector = reinterpret_cast<std::vector<char>*>(context);
+  // NOLINTNEXTLINE (cppcoreguidelines-pro-type-reinterpret-cast)
   auto charData = reinterpret_cast<char*>(data);
-  *vector       = std::vector<char>(charData, charData + len);
+  // NOLINTNEXTLINE (cppcoreguidelines-pro-bounds-pointer-arithmetic)
+  *vector = std::vector<char>(charData, charData + len);
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
 class GetHandler : public CivetHandler {
  public:
-  GetHandler(std::function<void(CivetServer*, mg_connection*)> const& handler)
+  explicit GetHandler(std::function<void(mg_connection*)> handler)
       : mHandler(std::move(handler)) {
   }
 
-  bool handleGet(CivetServer* server, mg_connection* conn) override {
-    mHandler(server, conn);
+  bool handleGet(CivetServer* /*server*/, mg_connection* conn) override {
+    mHandler(conn);
     return true;
   }
 
  private:
-  std::function<void(CivetServer*, mg_connection*)> mHandler;
+  std::function<void(mg_connection*)> mHandler;
 };
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
 class PostHandler : public CivetHandler {
  public:
-  PostHandler(std::function<void(CivetServer*, mg_connection*)> const& handler)
+  explicit PostHandler(std::function<void(mg_connection*)> handler)
       : mHandler(std::move(handler)) {
   }
 
-  bool handlePost(CivetServer* server, mg_connection* conn) override {
-    mHandler(server, conn);
+  bool handlePost(CivetServer* /*server*/, mg_connection* conn) override {
+    mHandler(conn);
     return true;
   }
 
  private:
-  std::function<void(CivetServer*, mg_connection*)> mHandler;
+  std::function<void(mg_connection*)> mHandler;
 };
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -132,7 +139,7 @@ void Plugin::init() {
       });
 
   // Return the landing page when the root document is requested.
-  mRootHandler = std::make_unique<GetHandler>([this](CivetServer* server, mg_connection* conn) {
+  mRootHandler = std::make_unique<GetHandler>([this](mg_connection* conn) {
     if (mPluginSettings.mPage) {
       mg_send_mime_file(conn, mPluginSettings.mPage.value().c_str(), "text/html");
     } else {
@@ -143,8 +150,8 @@ void Plugin::init() {
     }
   });
 
-  mLogHandler = std::make_unique<GetHandler>([this](CivetServer* server, mg_connection* conn) {
-    uint32_t length = getParam<uint32_t>(conn, "length", 100U);
+  mLogHandler = std::make_unique<GetHandler>([this](mg_connection* conn) {
+    auto length = getParam<uint32_t>(conn, "length", 100U);
 
     std::unique_lock<std::mutex> lock(mLogMutex);
     nlohmann::json               json;
@@ -160,7 +167,7 @@ void Plugin::init() {
     mg_write(conn, response.data(), response.length());
   });
 
-  mCaptureHandler = std::make_unique<GetHandler>([this](CivetServer* server, mg_connection* conn) {
+  mCaptureHandler = std::make_unique<GetHandler>([this](mg_connection* conn) {
     std::unique_lock<std::mutex> lock(mScreenShotMutex);
 
     mScreenShotDelay     = std::clamp(getParam<int32_t>(conn, "delay", 50), 1, 200);
@@ -182,7 +189,7 @@ void Plugin::init() {
     mg_write(conn, pngData.data(), pngData.size());
   });
 
-  mJSHandler = std::make_unique<PostHandler>([this](CivetServer* server, mg_connection* conn) {
+  mJSHandler = std::make_unique<PostHandler>([this](mg_connection* conn) {
     mJavaScriptQueue.push(CivetServer::getPostData(conn));
     std::string response = "Done.";
     mg_send_http_ok(conn, "text/plain", response.length());
