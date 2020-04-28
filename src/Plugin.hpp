@@ -21,11 +21,19 @@ class CivetHandler;
 
 namespace csp::webapi {
 
+/// This plugin contains a web server which provides some HTTP endpoints which can be used to
+/// remote-control CosmoScout VR.
 class Plugin : public cs::core::PluginBase {
  public:
   struct Settings {
+    /// The port where the server should listen on. For example 9999.
     cs::utils::Property<uint16_t> mPort;
-    std::optional<std::string>    mPage;
+
+    /// You can provide a path to an html file which will be served when a GET request is sent to
+    /// localhost:mPort, for example by a web browser. The path must be relative to the cosmoscout
+    /// executable. Note that no other files are served by the server, so the given html file should
+    /// not depend on other local resources.
+    std::optional<std::string> mPage;
   };
 
   void init() override;
