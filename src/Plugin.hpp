@@ -15,6 +15,7 @@
 #include <deque>
 #include <optional>
 #include <queue>
+#include <unordered_map>
 
 class CivetServer;
 class CivetHandler;
@@ -38,12 +39,9 @@ class Plugin : public cs::core::PluginBase {
   void startServer(uint16_t port);
   void quitServer();
 
-  Settings                      mPluginSettings;
-  std::unique_ptr<CivetServer>  mServer;
-  std::unique_ptr<CivetHandler> mRootHandler;
-  std::unique_ptr<CivetHandler> mLogHandler;
-  std::unique_ptr<CivetHandler> mCaptureHandler;
-  std::unique_ptr<CivetHandler> mJSHandler;
+  Settings                                                       mPluginSettings;
+  std::unique_ptr<CivetServer>                                   mServer;
+  std::unordered_map<std::string, std::unique_ptr<CivetHandler>> mHandlers;
 
   std::mutex                   mScreenShotMutex;
   std::condition_variable      mScreenShotDone;

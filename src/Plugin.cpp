@@ -138,7 +138,7 @@ void Plugin::init() {
       });
 
   // Return the landing page when the root document is requested.
-  mRootHandler = std::make_unique<GetHandler>([this](mg_connection* conn) {
+  mHandlers.emplace("/", std::make_unique<GetHandler>([this](mg_connection* conn) {
     if (mPluginSettings.mPage) {
       mg_send_mime_file(conn, mPluginSettings.mPage.value().c_str(), "text/html");
     } else {
@@ -147,9 +147,9 @@ void Plugin::init() {
       mg_send_http_ok(conn, "text/plain", response.length());
       mg_write(conn, response.data(), response.length());
     }
-  });
+  }));
 
-  mLogHandler = std::make_unique<GetHandler>([this](mg_connection* conn) {
+  mHandlers.emplace("/log", std::make_unique<GetHandler>([this](mg_connection* conn) {
     auto           length = getParam<uint32_t>(conn, "length", 100U);
     nlohmann::json json;
 
@@ -165,9 +165,9 @@ void Plugin::init() {
     std::string response = json.dump();
     mg_send_http_ok(conn, "application/json", response.length());
     mg_write(conn, response.data(), response.length());
-  });
+  }));
 
-  mCaptureHandler = std::make_unique<GetHandler>([this](mg_connection* conn) {
+  mHandlers.emplace("/capture", std::make_unique<GetHandler>([this](mg_connection* conn) {
     std::vector<char> pngData;
     {
       std::unique_lock<std::mutex> lock(mScreenShotMutex);
@@ -188,16 +188,16 @@ void Plugin::init() {
 
     mg_send_http_ok(conn, "image/png", pngData.size());
     mg_write(conn, pngData.data(), pngData.size());
-  });
+  }));
 
-  mJSHandler = std::make_unique<PostHandler>([this](mg_connection* conn) {
+  mHandlers.emplace("/run-js", std::make_unique<PostHandler>([this](mg_connection* conn) {
     std::string response = "Done.";
     mg_send_http_ok(conn, "text/plain", response.length());
     mg_write(conn, response.data(), response.length());
 
     std::lock_guard<std::mutex> lock(mJavaScriptCallsMutex);
     mJavaScriptCalls.push(CivetServer::getPostData(conn));
-  });
+  }));
 
   mOnLoadConnection = mAllSettings->onLoad().connect([this]() { onLoad(); });
   mOnSaveConnection = mAllSettings->onSave().connect(
@@ -272,10 +272,11 @@ void Plugin::startServer(uint16_t port) {
     std::vector<std::string> options{
         "document_root", "/", "listening_ports", std::to_string(port), "num_threads", "1"};
     mServer = std::make_unique<CivetServer>(options);
-    mServer->addHandler("/", *mRootHandler);
-    mServer->addHandler("/log", *mLogHandler);
-    mServer->addHandler("/capture", *mCaptureHandler);
-    mServer->addHandler("/run-js", *mJSHandler);
+
+    for (auto const& handler : mHandlers) {
+      mServer->addHandler(handler.first, *handler.second);
+    }
+
   } catch (std::exception const& e) { logger().warn("Failed to start server: {}!", e.what()); }
 }
 
