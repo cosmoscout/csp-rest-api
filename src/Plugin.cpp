@@ -168,26 +168,26 @@ void Plugin::init() {
   }));
 
   mHandlers.emplace("/capture", std::make_unique<GetHandler>([this](mg_connection* conn) {
-    std::vector<char> pngData;
-    {
+    // First acquire the lock to make sure the mScreenShot* members are not currently read by the
+    // main thread.
       std::unique_lock<std::mutex> lock(mScreenShotMutex);
 
-      mScreenShotDelay     = std::clamp(getParam<int32_t>(conn, "delay", 50), 1, 200);
-      mScreenShotWidth     = std::clamp(getParam<int32_t>(conn, "width", 800), 10, 2000);
-      mScreenShotHeight    = std::clamp(getParam<int32_t>(conn, "height", 600), 10, 2000);
-      mScreenShotGui       = getParam<std::string>(conn, "gui", "false") == "true";
+    // Read all paramters.
+    mScreenShotDelay  = std::clamp(getParam<int32_t>(conn, "delay", 50), 1, 200);
+    mScreenShotWidth  = std::clamp(getParam<int32_t>(conn, "width", 800), 10, 2000);
+    mScreenShotHeight = std::clamp(getParam<int32_t>(conn, "height", 600), 10, 2000);
+    mScreenShotGui    = getParam<std::string>(conn, "gui", "false") == "true";
+
+    // This tells the main thread that a capture request is pending.
       mScreenShotRequested = true;
 
+    // Now we use a condition variable to wait for the screenshot. It is actually captured in the
+    // Plugin::update() method further below.
       mScreenShotDone.wait(lock);
 
-      stbi_flip_vertically_on_write(1);
-      stbi_write_png_to_func(&pngWriteToVector, &pngData, mScreenShotWidth, mScreenShotHeight, 3,
-          mScreenShot.data(), mScreenShotWidth * 3);
-      stbi_flip_vertically_on_write(0);
-    }
-
-    mg_send_http_ok(conn, "image/png", pngData.size());
-    mg_write(conn, pngData.data(), pngData.size());
+    // The screenshot has been capture, return the result!
+    mg_send_http_ok(conn, "image/png", mScreenShot.size());
+    mg_write(conn, mScreenShot.data(), mScreenShot.size());
   }));
 
   mHandlers.emplace("/run-js", std::make_unique<PostHandler>([this](mg_connection* conn) {
@@ -231,7 +231,7 @@ void Plugin::update() {
 
   {
     std::lock_guard<std::mutex> lock(mJavaScriptCallsMutex);
-    if (!mJavaScriptCalls.empty()) {
+    while (!mJavaScriptCalls.empty()) {
       auto request = mJavaScriptCalls.front();
       mJavaScriptCalls.pop();
       logger().debug("Executing 'run-js' request: '{}'", request);
@@ -254,9 +254,15 @@ void Plugin::update() {
 
     auto* window = GetVistaSystem()->GetDisplayManager()->GetWindows().begin()->second;
     window->GetWindowProperties()->GetSize(mScreenShotWidth, mScreenShotHeight);
-    mScreenShot.resize(mScreenShotWidth * mScreenShotHeight * 3);
+
+    std::vector<VistaType::byte> screenshot(mScreenShotWidth * mScreenShotHeight * 3);
     glReadPixels(
-        0, 0, mScreenShotWidth, mScreenShotHeight, GL_RGB, GL_UNSIGNED_BYTE, &mScreenShot[0]);
+        0, 0, mScreenShotWidth, mScreenShotHeight, GL_RGB, GL_UNSIGNED_BYTE, &screenshot[0]);
+
+    stbi_flip_vertically_on_write(1);
+    stbi_write_png_to_func(&pngWriteToVector, &mScreenShot, mScreenShotWidth, mScreenShotHeight, 3,
+        screenshot.data(), mScreenShotWidth * 3);
+    stbi_flip_vertically_on_write(0);
 
     mCaptureAtFrame = 0;
     mScreenShotDone.notify_one();

@@ -10,7 +10,6 @@
 #include "../../../src/cs-core/PluginBase.hpp"
 #include "../../../src/cs-utils/DefaultProperty.hpp"
 
-#include <VistaBase/VistaBaseTypes.h>
 #include <condition_variable>
 #include <deque>
 #include <optional>
@@ -43,15 +42,15 @@ class Plugin : public cs::core::PluginBase {
   std::unique_ptr<CivetServer>                                   mServer;
   std::unordered_map<std::string, std::unique_ptr<CivetHandler>> mHandlers;
 
-  std::mutex                   mScreenShotMutex;
-  std::condition_variable      mScreenShotDone;
-  bool                         mScreenShotRequested = false;
-  int32_t                      mScreenShotWidth     = 0;
-  int32_t                      mScreenShotHeight    = 0;
-  int32_t                      mScreenShotDelay     = 0;
-  bool                         mScreenShotGui       = false;
-  int32_t                      mCaptureAtFrame      = 0;
-  std::vector<VistaType::byte> mScreenShot;
+  std::mutex              mScreenShotMutex;
+  std::condition_variable mScreenShotDone;
+  bool                    mScreenShotRequested = false;
+  int32_t                 mScreenShotWidth     = 0;
+  int32_t                 mScreenShotHeight    = 0;
+  int32_t                 mScreenShotDelay     = 0;
+  bool                    mScreenShotGui       = false;
+  int32_t                 mCaptureAtFrame      = 0;
+  std::vector<char>       mScreenShot;
 
   std::mutex              mLogMutex;
   std::deque<std::string> mLogMessages;
