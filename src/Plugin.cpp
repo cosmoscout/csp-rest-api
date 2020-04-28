@@ -46,10 +46,8 @@ namespace {
 // pretty unsafe, but I think it's the only way to make stb_image write to a std::vector<char>. If
 // anybody has a better idea...
 void pngWriteToVector(void* context, void* data, int len) {
-  // NOLINTNEXTLINE (cppcoreguidelines-pro-type-reinterpret-cast)
-  auto vector = reinterpret_cast<std::vector<char>*>(context);
-  // NOLINTNEXTLINE (cppcoreguidelines-pro-type-reinterpret-cast)
-  auto charData = reinterpret_cast<char*>(data);
+  auto* vector = static_cast<std::vector<char>*>(context);
+  auto* charData = static_cast<char*>(data);
   // NOLINTNEXTLINE (cppcoreguidelines-pro-bounds-pointer-arithmetic)
   *vector = std::vector<char>(charData, charData + len);
 }
@@ -236,7 +234,7 @@ void Plugin::update() {
 
   std::unique_lock<std::mutex> lock(mScreenShotMutex);
   if (mScreenShotRequested) {
-    auto window = GetVistaSystem()->GetDisplayManager()->GetWindows().begin()->second;
+    auto* window = GetVistaSystem()->GetDisplayManager()->GetWindows().begin()->second;
     window->GetWindowProperties()->SetSize(mScreenShotWidth, mScreenShotHeight);
     mCaptureAtFrame = GetVistaSystem()->GetFrameLoop()->GetFrameCount() + mScreenShotDelay;
     mAllSettings->pEnableUserInterface = mScreenShotGui;
@@ -247,7 +245,7 @@ void Plugin::update() {
     logger().info("Capture screenshot {}x{}; show gui: {}", mScreenShotWidth, mScreenShotHeight,
         mScreenShotGui);
 
-    auto window = GetVistaSystem()->GetDisplayManager()->GetWindows().begin()->second;
+    auto* window = GetVistaSystem()->GetDisplayManager()->GetWindows().begin()->second;
     window->GetWindowProperties()->GetSize(mScreenShotWidth, mScreenShotHeight);
     mScreenShot.resize(mScreenShotWidth * mScreenShotHeight * 3);
     glReadPixels(
