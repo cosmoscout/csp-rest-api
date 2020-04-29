@@ -199,7 +199,7 @@ void Plugin::init() {
     // Plugin::update() method further below.
     mScreenShotDone.wait(lock);
 
-    // The screenshot has been capture, return the result!
+    // The screenshot has been captured, return the result!
     mg_send_http_ok(conn, "image/png", mScreenShot.size());
     mg_write(conn, mScreenShot.data(), mScreenShot.size());
   }));
