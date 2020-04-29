@@ -58,7 +58,7 @@ class Plugin : public cs::core::PluginBase {
   int32_t                 mScreenShotDelay     = 0;
   bool                    mScreenShotGui       = false;
   int32_t                 mCaptureAtFrame      = 0;
-  std::vector<char>       mScreenShot;
+  std::vector<std::byte>  mScreenShot;
 
   std::mutex              mLogMutex;
   std::deque<std::string> mLogMessages;

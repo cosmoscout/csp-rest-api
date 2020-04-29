@@ -42,13 +42,13 @@ namespace {
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
-// Converts a void* to a std::vector<char> (which is given through a void* as well). So this is
-// pretty unsafe, but I think it's the only way to make stb_image write to a std::vector<char>.
+// Converts a void* to a std::vector<std::byte> (which is given through a void* as well). So this is
+// pretty unsafe, but I think it's the only way to make stb_image write to a std::vector<std::byte>.
 void pngWriteToVector(void* context, void* data, int len) {
-  auto* vector   = static_cast<std::vector<char>*>(context);
-  auto* charData = static_cast<char*>(data);
+  auto* vector   = static_cast<std::vector<std::byte>*>(context);
+  auto* charData = static_cast<std::byte*>(data);
   // NOLINTNEXTLINE (cppcoreguidelines-pro-bounds-pointer-arithmetic)
-  *vector = std::vector<char>(charData, charData + len);
+  *vector = std::vector<std::byte>(charData, charData + len);
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -271,13 +271,13 @@ void Plugin::update() {
   // Now we waited several frames. We read the pixels, encode the data as png and notify the
   // server's worker thread that the screen shot is done.
   if (mCaptureAtFrame > 0 && mCaptureAtFrame == GetVistaSystem()->GetFrameLoop()->GetFrameCount()) {
-    logger().info("Capture screenshot {}x{}; show gui: {}", mScreenShotWidth, mScreenShotHeight,
-        mScreenShotGui);
+    logger().debug("Capturing screenshot for /capture request: resolution = {}x{}, show gui = {}",
+        mScreenShotWidth, mScreenShotHeight, mScreenShotGui);
 
     auto* window = GetVistaSystem()->GetDisplayManager()->GetWindows().begin()->second;
     window->GetWindowProperties()->GetSize(mScreenShotWidth, mScreenShotHeight);
 
-    std::vector<VistaType::byte> screenshot(mScreenShotWidth * mScreenShotHeight * 3);
+    std::vector<std::byte> screenshot(mScreenShotWidth * mScreenShotHeight * 3);
     glReadPixels(
         0, 0, mScreenShotWidth, mScreenShotHeight, GL_RGB, GL_UNSIGNED_BYTE, &screenshot[0]);
 
