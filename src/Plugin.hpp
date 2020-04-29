@@ -11,6 +11,7 @@
 #include "../../../src/cs-utils/DefaultProperty.hpp"
 
 #include <condition_variable>
+#include <cstddef>
 #include <deque>
 #include <optional>
 #include <queue>
