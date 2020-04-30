@@ -298,12 +298,12 @@ void Plugin::update() {
 
       // We retrieve the current scene scale and far-clip distance in order to scale the depth
       // values to meters.
-      double      near{};
-      double      far{};
+      double      nearClip{};
+      double      farClip{};
       auto const& p = *GetVistaSystem()->GetDisplayManager()->GetProjectionsConstRef().begin();
-      p.second->GetProjectionProperties()->GetClippingRange(near, far);
+      p.second->GetProjectionProperties()->GetClippingRange(nearClip, farClip);
 
-      float scale = static_cast<float>(far * mSolarSystem->getObserver().getAnchorScale());
+      float scale = static_cast<float>(farClip * mSolarSystem->getObserver().getAnchorScale());
       for (auto& f : screenshot) {
         f *= scale;
       }
