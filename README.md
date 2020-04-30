@@ -1,4 +1,4 @@
-# Atmospheres for CosmoScout VR
+# Web API for CosmoScout VR
 
 A CosmoScout VR plugin which provides an HTTP protocol for controlling the application. This plugin is built as part of CosmoScout's build process. See the [main repository](https://github.com/cosmoscout/cosmoscout-vr) for instructions.
 

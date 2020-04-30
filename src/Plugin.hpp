@@ -58,6 +58,7 @@ class Plugin : public cs::core::PluginBase {
   int32_t                 mScreenShotHeight    = 0;
   int32_t                 mScreenShotDelay     = 0;
   bool                    mScreenShotGui       = false;
+  bool                    mScreenShotDepth     = false;
   int32_t                 mCaptureAtFrame      = 0;
   std::vector<std::byte>  mScreenShot;
 

@@ -8,6 +8,8 @@
 
 #include "../../../src/cs-core/GuiManager.hpp"
 #include "../../../src/cs-core/Settings.hpp"
+#include "../../../src/cs-core/SolarSystem.hpp"
+#include "../../../src/cs-scene/CelestialObserver.hpp"
 #include "../../../src/cs-utils/logger.hpp"
 #include "../../../src/cs-utils/utils.hpp"
 #include "logger.hpp"
@@ -15,10 +17,15 @@
 #include <CivetServer.h>
 #include <GL/glew.h>
 #include <VistaKernel/DisplayManager/VistaDisplayManager.h>
+#include <VistaKernel/DisplayManager/VistaProjection.h>
+#include <VistaKernel/DisplayManager/VistaViewport.h>
 #include <VistaKernel/DisplayManager/VistaWindow.h>
 #include <VistaKernel/VistaFrameLoop.h>
 #include <VistaKernel/VistaSystem.h>
 #include <curlpp/cURLpp.hpp>
+#include <sstream>
+#include <tiffio.h>
+#include <tiffio.hxx>
 
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include <stb_image_write.h>
@@ -191,6 +198,7 @@ void Plugin::init() {
     mScreenShotWidth  = std::clamp(getParam<int32_t>(conn, "width", 800), 10, 2000);
     mScreenShotHeight = std::clamp(getParam<int32_t>(conn, "height", 600), 10, 2000);
     mScreenShotGui    = getParam<std::string>(conn, "gui", "false") == "true";
+    mScreenShotDepth  = getParam<std::string>(conn, "depth", "false") == "true";
 
     // This tells the main thread that a capture request is pending.
     mScreenShotRequested = true;
@@ -200,7 +208,11 @@ void Plugin::init() {
     mScreenShotDone.wait(lock);
 
     // The screenshot has been captured, return the result!
-    mg_send_http_ok(conn, "image/png", mScreenShot.size());
+    if (mScreenShotDepth) {
+      mg_send_http_ok(conn, "image/tiff", mScreenShot.size());
+    } else {
+      mg_send_http_ok(conn, "image/png", mScreenShot.size());
+    }
     mg_write(conn, mScreenShot.data(), mScreenShot.size());
   }));
 
@@ -277,15 +289,66 @@ void Plugin::update() {
     auto* window = GetVistaSystem()->GetDisplayManager()->GetWindows().begin()->second;
     window->GetWindowProperties()->GetSize(mScreenShotWidth, mScreenShotHeight);
 
-    std::vector<std::byte> screenshot(mScreenShotWidth * mScreenShotHeight * 3);
-    glReadPixels(
-        0, 0, mScreenShotWidth, mScreenShotHeight, GL_RGB, GL_UNSIGNED_BYTE, &screenshot[0]);
+    if (mScreenShotDepth) {
 
-    // We encode the png data in the main thread as this is not thread-safe.
-    stbi_flip_vertically_on_write(1);
-    stbi_write_png_to_func(&pngWriteToVector, &mScreenShot, mScreenShotWidth, mScreenShotHeight, 3,
-        screenshot.data(), mScreenShotWidth * 3);
-    stbi_flip_vertically_on_write(0);
+      // Capture the depth component.
+      std::vector<float> screenshot(mScreenShotWidth * mScreenShotHeight);
+      glReadPixels(
+          0, 0, mScreenShotWidth, mScreenShotHeight, GL_DEPTH_COMPONENT, GL_FLOAT, &screenshot[0]);
+
+      // We retrieve the current scene scale and far-clip distance in order to scale the depth
+      // values to meters.
+      double      near{};
+      double      far{};
+      auto const& p = *GetVistaSystem()->GetDisplayManager()->GetProjectionsConstRef().begin();
+      p.second->GetProjectionProperties()->GetClippingRange(near, far);
+
+      float scale = static_cast<float>(far * mSolarSystem->getObserver().getAnchorScale());
+      for (auto& f : screenshot) {
+        f *= scale;
+      }
+
+      // No write the tiff image.
+      std::ostringstream oStream;
+
+      TIFF* out = TIFFStreamOpen("MemTIFF", &oStream);
+
+      TIFFSetField(out, TIFFTAG_IMAGEWIDTH, mScreenShotWidth);
+      TIFFSetField(out, TIFFTAG_IMAGELENGTH, mScreenShotHeight);
+      TIFFSetField(out, TIFFTAG_SAMPLESPERPIXEL, 1);
+      TIFFSetField(out, TIFFTAG_BITSPERSAMPLE, 32);
+      TIFFSetField(out, TIFFTAG_ORIENTATION, ORIENTATION_TOPLEFT);
+      TIFFSetField(out, TIFFTAG_ROWSPERSTRIP, 16);
+      TIFFSetField(out, TIFFTAG_COMPRESSION, COMPRESSION_NONE);
+      TIFFSetField(out, TIFFTAG_PLANARCONFIG, PLANARCONFIG_CONTIG);
+      TIFFSetField(out, TIFFTAG_SAMPLEFORMAT, SAMPLEFORMAT_IEEEFP);
+      TIFFSetField(out, TIFFTAG_PHOTOMETRIC, PHOTOMETRIC_MINISBLACK);
+
+      for (uint32_t i(0); i < mScreenShotHeight; ++i) {
+        TIFFWriteScanline(out, &screenshot.at((mScreenShotHeight - i - 1) * mScreenShotWidth), i);
+      }
+
+      TIFFClose(out);
+
+      // Convert the stringstream to a std::vector<std::byte>.
+      std::string s = oStream.str();
+      mScreenShot.clear();
+      mScreenShot.reserve(s.size());
+
+      std::transform(s.begin(), s.end(), std::back_inserter(mScreenShot),
+          [](char& c) { return static_cast<std::byte>(c); });
+
+    } else {
+      std::vector<std::byte> screenshot(mScreenShotWidth * mScreenShotHeight * 3);
+      glReadPixels(
+          0, 0, mScreenShotWidth, mScreenShotHeight, GL_RGB, GL_UNSIGNED_BYTE, &screenshot[0]);
+
+      // We encode the png data in the main thread as this is not thread-safe.
+      stbi_flip_vertically_on_write(1);
+      stbi_write_png_to_func(&pngWriteToVector, &mScreenShot, mScreenShotWidth, mScreenShotHeight,
+          3, screenshot.data(), mScreenShotWidth * 3);
+      stbi_flip_vertically_on_write(0);
+    }
 
     mCaptureAtFrame = 0;
     mScreenShotDone.notify_one();

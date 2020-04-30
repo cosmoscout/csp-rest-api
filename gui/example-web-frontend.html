@@ -183,11 +183,11 @@
             <span class="grey-text">[GET]</span>
           </div>
           <div class="collapsible-body white">
-            The /capture endpoint can be used to capture an image. Here is an example URL: <a
-              href="/capture?width=1200&height=800&gui=true" target="_blank"><span
+            The /capture endpoint can be used to capture a color or a depth image
+            . Here is an example URL: <a href="/capture?width=1200&height=800&gui=true"
+              target="_blank"><span
                 class="document-location"></span>capture?width=1200&height=800&gui=true</a>. To
-            retrieve images with
-            the command line, you could use curl:
+            retrieve images with the command line, you could use curl:
 
             <div class="card-panel blue-grey darken-3 white-text code">
               curl <span class="document-location"></span>capture --output image.png
@@ -196,6 +196,16 @@
             <div class="card-panel blue-grey darken-3 white-text code">
               curl <span class="document-location"></span>capture?width=1200&height=800&gui=true
               --output image.png
+            </div>
+
+            Color images will be returned in png format with 8 bits per RGB channel.
+            Depth images will be returned as 32 bit floating point grayscale tiff image.
+            Since most image viewers will display this as pure white, you may convert it to 8 bit
+            for visualization. With <a href="https://imagemagick.org/index.php">imagemagick</a>,
+            this can be done like this:
+
+            <div class="card-panel blue-grey darken-3 white-text code">
+              magick capture.tiff -auto-level -auto-gamma normalized.png
             </div>
 
             <table>
@@ -228,6 +238,12 @@
                   <td>50</td>
                   <td>The application will wait this many frames before capturing the image.
                     Increase this, if something seems to be not properly loaded.</td>
+                </tr>
+                <tr>
+                  <td>depth</td>
+                  <td>false</td>
+                  <td>If set to true, a 32 bit floating point grayscale range image in meters will
+                    be generated instead of a color image.</td>
                 </tr>
               </tbody>
             </table>
