@@ -324,7 +324,7 @@ void Plugin::update() {
       TIFFSetField(out, TIFFTAG_SAMPLEFORMAT, SAMPLEFORMAT_IEEEFP);
       TIFFSetField(out, TIFFTAG_PHOTOMETRIC, PHOTOMETRIC_MINISBLACK);
 
-      for (uint32_t i(0); i < mScreenShotHeight; ++i) {
+      for (int32_t i(0); i < mScreenShotHeight; ++i) {
         TIFFWriteScanline(out, &screenshot.at((mScreenShotHeight - i - 1) * mScreenShotWidth), i);
       }
 
