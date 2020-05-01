@@ -184,58 +184,86 @@ void Plugin::init() {
     mg_write(conn, response.data(), response.length());
   }));
 
+  // Return a json object containing the current scene settings.
+  mHandlers.emplace("/save", std::make_unique<GetHandler>([this](mg_connection* conn) {
+    // This string will contain the json data at the end of this method.
+    std::string response;
+    {
+      std::unique_lock<std::mutex> lock(mSaveMutex);
+
+      // This tells the main thread that a save request is pending.
+      mSaveRequested = true;
+
+      // Now we use a condition variable to wait for the save data. It is actually saved in the
+      // Plugin::update() method further below.
+      mSaveDone.wait(lock);
+
+      response = mSaveSettings;
+    }
+
+    mg_send_http_ok(conn, "application/json", response.length());
+    mg_write(conn, response.data(), response.length());
+  }));
+
+  // Allows uploading of the current scene settings.
+  mHandlers.emplace("/load", std::make_unique<PostHandler>([this](mg_connection* conn) {
+    std::lock_guard<std::mutex> lock(mLoadMutex);
+    mLoadSettings = CivetServer::getPostData(conn);
+
+    std::string response = "Done.\r\n";
+    mg_send_http_ok(conn, "text/plain", response.length());
+    mg_write(conn, response.data(), response.length());
+  }));
+
   // The /capture endpoint is a little bit more involved. As it takes several frames for the
-  // screenshot to be completed (first we have to resize CosmoScout's window to the requested size,
+  // capture to be completed (first we have to resize CosmoScout's window to the requested size,
   // then we have to wait some frames so that everything is loaded properly), we have to do some
   // more synchronization here.
   mHandlers.emplace("/capture", std::make_unique<GetHandler>([this](mg_connection* conn) {
-    // First acquire the lock to make sure the mScreenShot* members are not currently read by the
+    // First acquire the lock to make sure the mCapture* members are not currently read by the
     // main thread.
-    std::unique_lock<std::mutex> lock(mScreenShotMutex);
+    std::unique_lock<std::mutex> lock(mCaptureMutex);
 
     // Read all paramters.
-    mScreenShotDelay  = std::clamp(getParam<int32_t>(conn, "delay", 50), 1, 200);
-    mScreenShotWidth  = std::clamp(getParam<int32_t>(conn, "width", 800), 10, 2000);
-    mScreenShotHeight = std::clamp(getParam<int32_t>(conn, "height", 600), 10, 2000);
-    mScreenShotGui    = getParam<std::string>(conn, "gui", "false") == "true";
-    mScreenShotDepth  = getParam<std::string>(conn, "depth", "false") == "true";
+    mCaptureDelay  = std::clamp(getParam<int32_t>(conn, "delay", 50), 1, 200);
+    mCaptureWidth  = std::clamp(getParam<int32_t>(conn, "width", 800), 10, 2000);
+    mCaptureHeight = std::clamp(getParam<int32_t>(conn, "height", 600), 10, 2000);
+    mCaptureGui    = getParam<std::string>(conn, "gui", "false") == "true";
+    mCaptureDepth  = getParam<std::string>(conn, "depth", "false") == "true";
 
     // This tells the main thread that a capture request is pending.
-    mScreenShotRequested = true;
+    mCaptureRequested = true;
 
-    // Now we use a condition variable to wait for the screenshot. It is actually captured in the
+    // Now we use a condition variable to wait for the capture. It is actually captured in the
     // Plugin::update() method further below.
-    mScreenShotDone.wait(lock);
+    mCaptureDone.wait(lock);
 
-    // The screenshot has been captured, return the result!
-    if (mScreenShotDepth) {
-      mg_send_http_ok(conn, "image/tiff", mScreenShot.size());
+    // The capture has been captured, return the result!
+    if (mCaptureDepth) {
+      mg_send_http_ok(conn, "image/tiff", mCapture.size());
     } else {
-      mg_send_http_ok(conn, "image/png", mScreenShot.size());
+      mg_send_http_ok(conn, "image/png", mCapture.size());
     }
-    mg_write(conn, mScreenShot.data(), mScreenShot.size());
+    mg_write(conn, mCapture.data(), mCapture.size());
   }));
 
   // All POST requests received on /run-js are stored in a queue. They are executed in the main
   // thread in the Plugin::update() method further below.
   mHandlers.emplace("/run-js", std::make_unique<PostHandler>([this](mg_connection* conn) {
-    std::string response = "Done.";
-    mg_send_http_ok(conn, "text/plain", response.length());
-    mg_write(conn, response.data(), response.length());
-
     std::lock_guard<std::mutex> lock(mJavaScriptCallsMutex);
     mJavaScriptCalls.push(CivetServer::getPostData(conn));
+
+    std::string response = "Done.\r\n";
+    mg_send_http_ok(conn, "text/plain", response.length());
+    mg_write(conn, response.data(), response.length());
   }));
 
-  mOnLoadConnection = mAllSettings->onLoad().connect([this]() { onLoad(); });
+  mOnLoadConnection = mAllSettings->onLoad().connect([this]() { mReloadRequired = true; });
   mOnSaveConnection = mAllSettings->onSave().connect(
       [this]() { mAllSettings->mPlugins["csp-web-api"] = mPluginSettings; });
 
   // Restart the server if the port changes.
   mPluginSettings.mPort.connect([this](uint16_t port) { startServer(port); });
-
-  // Load settings.
-  onLoad();
 
   logger().info("Loading done.");
 }
@@ -258,100 +286,141 @@ void Plugin::deInit() {
 
 void Plugin::update() {
 
-  // Execute all JavaScript requests received since the last call to update().
+  // Execute all /run-js requests received since the last call to update().
   {
     std::lock_guard<std::mutex> lock(mJavaScriptCallsMutex);
     while (!mJavaScriptCalls.empty()) {
       auto request = mJavaScriptCalls.front();
       mJavaScriptCalls.pop();
-      logger().debug("Executing 'run-js' request: '{}'", request);
+      logger().debug("Executing '/run-js' request: '{}'", request);
       mGuiManager->getGui()->executeJavascript(request);
     }
   }
 
-  // If a screen shot has been requested, we first resize the image to the given size. Then we wait
-  // mScreenShotDelay frames until we actually read the pixels.
-  std::lock_guard<std::mutex> lock(mScreenShotMutex);
-  if (mScreenShotRequested) {
-    auto* window = GetVistaSystem()->GetDisplayManager()->GetWindows().begin()->second;
-    window->GetWindowProperties()->SetSize(mScreenShotWidth, mScreenShotHeight);
-    mCaptureAtFrame = GetVistaSystem()->GetFrameLoop()->GetFrameCount() + mScreenShotDelay;
-    mAllSettings->pEnableUserInterface = mScreenShotGui;
-    mScreenShotRequested               = false;
+  // Execute any pending /save request.
+  {
+    std::lock_guard<std::mutex> lock(mSaveMutex);
+    if (mSaveRequested) {
+      logger().debug("Executing '/save' request.");
+      try {
+        mSaveSettings = mAllSettings->saveToJson();
+      } catch (std::exception const& e) {
+        logger().error("Failed to write settings: {}", e.what());
+        mSaveSettings = "";
+      }
+      mSaveDone.notify_one();
+      mSaveRequested = false;
+    }
   }
 
-  // Now we waited several frames. We read the pixels, encode the data as png and notify the
-  // server's worker thread that the screen shot is done.
-  if (mCaptureAtFrame > 0 && mCaptureAtFrame == GetVistaSystem()->GetFrameLoop()->GetFrameCount()) {
-    logger().debug("Capturing screenshot for /capture request: resolution = {}x{}, show gui = {}",
-        mScreenShotWidth, mScreenShotHeight, mScreenShotGui);
-
-    auto* window = GetVistaSystem()->GetDisplayManager()->GetWindows().begin()->second;
-    window->GetWindowProperties()->GetSize(mScreenShotWidth, mScreenShotHeight);
-
-    if (mScreenShotDepth) {
-
-      // Capture the depth component.
-      std::vector<float> screenshot(mScreenShotWidth * mScreenShotHeight);
-      glReadPixels(
-          0, 0, mScreenShotWidth, mScreenShotHeight, GL_DEPTH_COMPONENT, GL_FLOAT, &screenshot[0]);
-
-      // We retrieve the current scene scale and far-clip distance in order to scale the depth
-      // values to meters.
-      double      nearClip{};
-      double      farClip{};
-      auto const& p = *GetVistaSystem()->GetDisplayManager()->GetProjectionsConstRef().begin();
-      p.second->GetProjectionProperties()->GetClippingRange(nearClip, farClip);
-
-      float scale = static_cast<float>(farClip * mSolarSystem->getObserver().getAnchorScale());
-      for (auto& f : screenshot) {
-        f *= scale;
+  // Execute any pending /load request.
+  {
+    std::lock_guard<std::mutex> lock(mLoadMutex);
+    if (!mLoadSettings.empty()) {
+      logger().debug("Executing '/load' request.");
+      try {
+        mAllSettings->loadFromJson(mLoadSettings);
+      } catch (std::exception const& e) {
+        logger().error("Failed to read settings: {}", e.what());
+        mSaveSettings = "";
       }
+      mLoadSettings.clear();
+    }
+  }
 
-      // No write the tiff image.
-      std::ostringstream oStream;
+  // If a screen shot has been requested, we first resize the image to the given size. Then we wait
+  // mCaptureDelay frames until we actually read the pixels.
+  {
 
-      TIFF* out = TIFFStreamOpen("MemTIFF", &oStream);
-
-      TIFFSetField(out, TIFFTAG_IMAGEWIDTH, mScreenShotWidth);
-      TIFFSetField(out, TIFFTAG_IMAGELENGTH, mScreenShotHeight);
-      TIFFSetField(out, TIFFTAG_SAMPLESPERPIXEL, 1);
-      TIFFSetField(out, TIFFTAG_BITSPERSAMPLE, 32);
-      TIFFSetField(out, TIFFTAG_ORIENTATION, ORIENTATION_TOPLEFT);
-      TIFFSetField(out, TIFFTAG_ROWSPERSTRIP, 16);
-      TIFFSetField(out, TIFFTAG_COMPRESSION, COMPRESSION_NONE);
-      TIFFSetField(out, TIFFTAG_PLANARCONFIG, PLANARCONFIG_CONTIG);
-      TIFFSetField(out, TIFFTAG_SAMPLEFORMAT, SAMPLEFORMAT_IEEEFP);
-      TIFFSetField(out, TIFFTAG_PHOTOMETRIC, PHOTOMETRIC_MINISBLACK);
-
-      for (int32_t i(0); i < mScreenShotHeight; ++i) {
-        TIFFWriteScanline(out, &screenshot.at((mScreenShotHeight - i - 1) * mScreenShotWidth), i);
-      }
-
-      TIFFClose(out);
-
-      // Convert the stringstream to a std::vector<std::byte>.
-      std::string s = oStream.str();
-      mScreenShot.clear();
-      mScreenShot.reserve(s.size());
-
-      std::transform(s.begin(), s.end(), std::back_inserter(mScreenShot),
-          [](char& c) { return static_cast<std::byte>(c); });
-
-    } else {
-      std::vector<std::byte> screenshot(mScreenShotWidth * mScreenShotHeight * 3);
-      glReadPixels(
-          0, 0, mScreenShotWidth, mScreenShotHeight, GL_RGB, GL_UNSIGNED_BYTE, &screenshot[0]);
-
-      // We encode the png data in the main thread as this is not thread-safe.
-      stbi_flip_vertically_on_write(1);
-      stbi_write_png_to_func(&pngWriteToVector, &mScreenShot, mScreenShotWidth, mScreenShotHeight,
-          3, screenshot.data(), mScreenShotWidth * 3);
-      stbi_flip_vertically_on_write(0);
+    std::lock_guard<std::mutex> lock(mCaptureMutex);
+    if (mCaptureRequested) {
+      auto* window = GetVistaSystem()->GetDisplayManager()->GetWindows().begin()->second;
+      window->GetWindowProperties()->SetSize(mCaptureWidth, mCaptureHeight);
+      mCaptureAtFrame = GetVistaSystem()->GetFrameLoop()->GetFrameCount() + mCaptureDelay;
+      mAllSettings->pEnableUserInterface = mCaptureGui;
+      mCaptureRequested                  = false;
     }
 
-    mCaptureAtFrame = 0;
-    mScreenShotDone.notify_one();
+    // Now we waited several frames. We read the pixels, encode the data as png and notify the
+    // server's worker thread that the screen shot is done.
+    if (mCaptureAtFrame > 0 &&
+        mCaptureAtFrame == GetVistaSystem()->GetFrameLoop()->GetFrameCount()) {
+      logger().debug("Capturing capture for /capture request: resolution = {}x{}, show gui = {}",
+          mCaptureWidth, mCaptureHeight, mCaptureGui);
+
+      auto* window = GetVistaSystem()->GetDisplayManager()->GetWindows().begin()->second;
+      window->GetWindowProperties()->GetSize(mCaptureWidth, mCaptureHeight);
+
+      if (mCaptureDepth) {
+
+        // capture the depth component.
+        std::vector<float> capture(mCaptureWidth * mCaptureHeight);
+        glReadPixels(
+            0, 0, mCaptureWidth, mCaptureHeight, GL_DEPTH_COMPONENT, GL_FLOAT, &capture[0]);
+
+        // We retrieve the current scene scale and far-clip distance in order to scale the depth
+        // values to meters.
+        double      nearClip{};
+        double      farClip{};
+        auto const& p = *GetVistaSystem()->GetDisplayManager()->GetProjectionsConstRef().begin();
+        p.second->GetProjectionProperties()->GetClippingRange(nearClip, farClip);
+
+        float scale = static_cast<float>(farClip * mSolarSystem->getObserver().getAnchorScale());
+        for (auto& f : capture) {
+          f *= scale;
+        }
+
+        // Now write the tiff image.
+        std::ostringstream oStream;
+        TIFF*              out = TIFFStreamOpen("MemTIFF", &oStream);
+
+        TIFFSetField(out, TIFFTAG_IMAGEWIDTH, mCaptureWidth);
+        TIFFSetField(out, TIFFTAG_IMAGELENGTH, mCaptureHeight);
+        TIFFSetField(out, TIFFTAG_SAMPLESPERPIXEL, 1);
+        TIFFSetField(out, TIFFTAG_BITSPERSAMPLE, 32);
+        TIFFSetField(out, TIFFTAG_ORIENTATION, ORIENTATION_TOPLEFT);
+        TIFFSetField(out, TIFFTAG_ROWSPERSTRIP, 16);
+        TIFFSetField(out, TIFFTAG_COMPRESSION, COMPRESSION_NONE);
+        TIFFSetField(out, TIFFTAG_PLANARCONFIG, PLANARCONFIG_CONTIG);
+        TIFFSetField(out, TIFFTAG_SAMPLEFORMAT, SAMPLEFORMAT_IEEEFP);
+        TIFFSetField(out, TIFFTAG_PHOTOMETRIC, PHOTOMETRIC_MINISBLACK);
+
+        for (int32_t i(0); i < mCaptureHeight; ++i) {
+          TIFFWriteScanline(out, &capture.at((mCaptureHeight - i - 1) * mCaptureWidth), i);
+        }
+
+        TIFFClose(out);
+
+        // Convert the stringstream to a std::vector<std::byte>.
+        std::string s = oStream.str();
+        mCapture.clear();
+        mCapture.reserve(s.size());
+
+        std::transform(s.begin(), s.end(), std::back_inserter(mCapture),
+            [](char& c) { return static_cast<std::byte>(c); });
+
+      } else {
+        // Writing pngs is simpler.
+        std::vector<std::byte> capture(mCaptureWidth * mCaptureHeight * 3);
+        glReadPixels(0, 0, mCaptureWidth, mCaptureHeight, GL_RGB, GL_UNSIGNED_BYTE, &capture[0]);
+
+        // We encode the png data in the main thread as this is not thread-safe.
+        stbi_flip_vertically_on_write(1);
+        stbi_write_png_to_func(&pngWriteToVector, &mCapture, mCaptureWidth, mCaptureHeight, 3,
+            capture.data(), mCaptureWidth * 3);
+        stbi_flip_vertically_on_write(0);
+      }
+
+      mCaptureAtFrame = 0;
+      mCaptureDone.notify_one();
+    }
+  }
+
+  // In this plugin, we cannot call this directly when the onLoad signal of the settings is fired,
+  // since reloading can cause our server to be restarted. And as reloading can be triggered from a
+  // /load request, this could lead to a deadlock.
+  if (mReloadRequired) {
+    from_json(mAllSettings->mPlugins.at("csp-web-api"), mPluginSettings);
   }
 }
 
@@ -382,13 +451,6 @@ void Plugin::quitServer() {
       mServer.reset();
     }
   } catch (std::exception const& e) { logger().warn("Failed to quit server: {}!", e.what()); }
-}
-
-////////////////////////////////////////////////////////////////////////////////////////////////////
-
-void Plugin::onLoad() {
-  // Read settings from JSON.
-  from_json(mAllSettings->mPlugins.at("csp-web-api"), mPluginSettings);
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
