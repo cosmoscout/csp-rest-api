@@ -5,7 +5,7 @@ A CosmoScout VR plugin which provides an HTTP protocol for controlling the appli
 This is a default plugin of CosmoScout VR. Hence, any **issues should be reported to the [main issue tracker](https://github.com/cosmoscout/cosmoscout-vr/issues)**. There you can add a label indicating which plugins are affected.
 
 ### ⚠️ **WARNING** ⚠️
-This plugin deliberately exposes the Javascript API of CosmoScout VR over the Rest API. **This can be abused!** The plugin should only be used in internal networks, where the users are trusted.
+This plugin deliberately exposes the Javascript API of CosmoScout VR over the Rest API. **This can be abused and poses a security risk for the server and the host!** The plugin should only be used in internal networks, where the users are trusted.
 
 ## Configuration
 
